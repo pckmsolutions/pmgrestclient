@@ -3,6 +3,7 @@ from logging import getLogger
 from json.decoder import JSONDecodeError
 from time import sleep
 from enum import Enum
+from os.path import join as join_path
 
 logger = getLogger(__name__)
 
@@ -55,6 +56,18 @@ class ApiBase(object):
 
     def patch(self, path, headers=None, data=None, params=None, path_abs=False, **kwargs):
         return self._call(requests.patch, path, headers=headers, data=data, params=params, path_abs=path_abs, **kwargs)
+
+    def download_file(self, source_url, local_dir):
+        local_path = join_path(local_dir, source_url[source_url.rfind('/') + 1:])
+        with open(local_path, 'wb') as img_file:
+            resp = requests.get(source_url, stream=True, headers=self.headers())
+            if not resp.ok:
+                raise ApiCallException(self.error_code_type, status_code=resp.status_code, url=source_url)
+            for block in resp.iter_content(1024):
+                if not block:
+                    break
+                img_file.write(block)
+        return local_path
 
     def _url(self, path, path_abs):
         return f'{self.base}/{path}' if not path_abs else path
