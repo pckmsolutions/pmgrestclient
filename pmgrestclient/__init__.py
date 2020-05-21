@@ -33,14 +33,24 @@ class ApiCallException(Exception):
     def response_body(self):
         return self.given_args.get('response_body', {})
 
+def json_response_handler(res):
+    return json(res)
+
+def json_status_response_hander(res):
+    ret = json(res)
+    return ret, res.status_code
+
+def json_headers_response_hander(res):
+    ret = json(res)
+    return ret, res.headers
+
 class ApiBase(object):
-    def __init__(self, base, error_code_type=Enum, stat404retry_count=None, stat404retry_delay=None, status_code_response=True):
+    def __init__(self, base, error_code_type=Enum, stat404retry_count=None, stat404retry_delay=None):
         self.base = base
         self.error_code_type = error_code_type
         self.stat404retry_count = stat404retry_count or 0
         self.stat404retry_delay = stat404retry_delay or 0
         self.errors_by_code = {e.value[0]:e for e in error_code_type}
-        self.status_code_response = status_code_response
 
     def get(self, path, headers=None, data=None, params=None, path_abs=False, **kwargs):
         return self._call(requests.get, path, headers=headers, data=data, params=params, path_abs=path_abs, **kwargs)
@@ -72,15 +82,15 @@ class ApiBase(object):
     def _url(self, path, path_abs):
         return f'{self.base}/{path}' if not path_abs else path
 
-    def _call(self, call, path, headers=None, data=None, params=None, path_abs=False, **kwargs):
+    def _call(self, call, path, headers=None, data=None, params=None, path_abs=False,
+            response_handler=json_response_handler, **kwargs):
         for i in range(0, self.stat404retry_count + 1):
             try:
                 res = call(self._url(path, path_abs), headers=(headers or self.headers(**kwargs)), json=data if data else None, params=params)
             except requests.exceptions.ConnectionError as e:
-                raise ApiCallException(self.error_code_type, message=f'Connection error', url=self._url(path, path_abs))
+                self.abort(message=f'Connection error', url=self._url(path, path_abs))
             if 200 <= res.status_code <= 299:
-                ret = json(res)
-                return (ret, res.status_code) if self.status_code_response else ret
+                return response_handler(res)
             if res.status_code == 404 and i < self.stat404retry_count:
                 logger.warning(f'Call to {self._url(path, path_abs)} returned 404 (call {i+1} of {self.stat404retry_count} trying again with delay of {self.stat404retry_delay} seconds)')
                 sleep(self.stat404retry_delay)
@@ -92,17 +102,20 @@ class ApiBase(object):
             logger.error(f'Error Response in call to {path}: {resp_j}')
             error = self.response_error_code(resp_j)
             if error in self.errors_by_code:
-                raise ApiCallException(self.error_code_type, status_code=res.status_code, error=self.errors_by_code.get(error),
+                self.abort(status_code=res.status_code, error=self.errors_by_code.get(error),
                         url=self._url(path, path_abs), response_body=resp_j)
         except ValueError:
             pass
-        raise ApiCallException(self.error_code_type, status_code=res.status_code, url=self._url(path, path_abs))
+        self.abort(status_code=res.status_code, url=self._url(path, path_abs))
 
     def headers(self, **kwargs):
         return None
 
     def response_error_code(self, response):
         return response.get('error')
+
+    def abort(self, **kwargs):
+        raise ApiCallException(self.error_code_type, **kwargs)
 
 def json(resp):
     try:
